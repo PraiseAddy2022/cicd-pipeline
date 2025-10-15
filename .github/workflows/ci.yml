@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t ${{secrets.REGISTRY_USER}} /cicd-pipeline .
+        run: docker build -t ${{secrets.REGISTRY_USER}}/cicd-pipeline .
 
       - name: Push image
         run: |
