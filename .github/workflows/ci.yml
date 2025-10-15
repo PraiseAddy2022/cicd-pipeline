@@ -13,9 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t praiseaddy/cicd-pipeline .
+        run: docker build -t ${{secrets.REGISTRY_USER}} /cicd-pipeline .
 
       - name: Push image
         run: |
-          docker login -u praiseaddy -p ${{secrets.REGISTRY_PASS}}
-          docker push praiseaddy/cicd-pipeline
+          docker login -u ${{secrets.REGISTRY_USER}} -p ${{secrets.REGISTRY_PASS}}
+          docker push ${{secrets.REGISTRY_USER}}/cicd-pipeline
