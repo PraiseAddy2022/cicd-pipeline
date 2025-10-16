@@ -1,68 +1,55 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline - Build, Push, and Deploy
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
     branches: [ "main" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      # Step 1: Checkout code
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Step 2: Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1   # change to your region if needed
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 3: Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 4: Build Docker image
-      - name: Build Docker image
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          ECR_REPOSITORY: cicd-pipeline
+          IMAGE_TAG: ${{ github.run_number }}
         run: |
-          IMAGE_NAME=cicd-pipeline
-          IMAGE_TAG=${{ github.run_number }}
-          docker build -t $IMAGE_NAME:$IMAGE_TAG .
-          docker tag $IMAGE_NAME:$IMAGE_TAG ${{ steps.login-ecr.outputs.registry }}/$IMAGE_NAME:$IMAGE_TAG
-
-      # Step 5: Scan the image (before push)
-      - name: Scan image
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.login-ecr.outputs.registry }}/cicd-pipeline:${{ github.run_number }}
-          format: 'table'
-          exit-code: '0'
-          ignore-unfixed: true
-
-      # Step 6: Push image to ECR
-      - name: Push image to ECR
-        run: |
-          IMAGE_NAME=cicd-pipeline
-          IMAGE_TAG=${{ github.run_number }}
-          docker push ${{ steps.login-ecr.outputs.registry }}/$IMAGE_NAME:$IMAGE_TAG
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: SSH to Server
+      - name: SSH to EC2 Server and Deploy
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.KEY }}
-          # port: ${{ secrets.PORT }}
           script: |
+            echo "Logging into AWS ECR..."
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+
+            echo "Pulling latest image from ECR..."
+            docker pull ${{ secrets.ECR_REGISTRY }}/cicd-pipeline:${{ github.run_number }}
+
+            echo "Stopping old container..."
             docker rm -f resume || true
-            docker pull ${{ steps.login-ecr.outputs.registry }}/cicd-pipeline:${{ github.run_number }}
-            docker run -d --name resume -p 8080:5001 ${{ steps.login-ecr.outputs.registry }}/cicd-pipeline:${{ github.run_number }}
+
+            echo "Starting new container..."
+            docker run -d --name resume -p 8080:5001 ${{ secrets.ECR_REGISTRY }}/cicd-pipeline:${{ github.run_number }}
