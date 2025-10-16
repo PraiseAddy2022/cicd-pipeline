@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
@@ -11,27 +11,58 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout code
       - uses: actions/checkout@v4
-      - name: Build image
+
+      # Step 2: Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1   # change to your region if needed
+
+      # Step 3: Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Step 4: Build Docker image
+      - name: Build Docker image
         run: |
-              docker build -t ${{secrets.REGISTRY_USER}}/cicd-pipeline:${{github.run_number}} .
-              docker build -t ${{secrets.REGISTRY_USER}}/cicd-pipeline .
-      - name: Push image
+          IMAGE_NAME=cicd-pipeline
+          IMAGE_TAG=${{ github.run_number }}
+          docker build -t $IMAGE_NAME:$IMAGE_TAG .
+          docker tag $IMAGE_NAME:$IMAGE_TAG ${{ steps.login-ecr.outputs.registry }}/$IMAGE_NAME:$IMAGE_TAG
+
+      # Step 5: Scan the image (before push)
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/cicd-pipeline:${{ github.run_number }}
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+
+      # Step 6: Push image to ECR
+      - name: Push image to ECR
         run: |
-          docker login -u ${{secrets.REGISTRY_USER}} -p ${{secrets.REGISTRY_PASS}}
-          docker push ${{secrets.REGISTRY_USER}}/cicd-pipeline:${{github.run_number}}
-          docker push ${{secrets.REGISTRY_USER}}/cicd-pipeline
+          IMAGE_NAME=cicd-pipeline
+          IMAGE_TAG=${{ github.run_number }}
+          docker push ${{ steps.login-ecr.outputs.registry }}/$IMAGE_NAME:$IMAGE_TAG
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
-        - name: SSH to Server
-          uses: appleboy/ssh-action@v1
-          with:
-            host: ${{ secrets.HOST }}
-            username: ${{ secrets.USERNAME }}
-            key: ${{ secrets.KEY }}
-            #port: ${{ secrets.PORT }}
-            script: |
-                    docker rm -f resume
-                    docker run -d --name resume -p 8080:5001 ${{secrets.REGISTRY_USER}}/cicd-pipeline:${{github.run_number}}
+      - name: SSH to Server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          # port: ${{ secrets.PORT }}
+          script: |
+            docker rm -f resume || true
+            docker pull ${{ steps.login-ecr.outputs.registry }}/cicd-pipeline:${{ github.run_number }}
+            docker run -d --name resume -p 8080:5001 ${{ steps.login-ecr.outputs.registry }}/cicd-pipeline:${{ github.run_number }}
